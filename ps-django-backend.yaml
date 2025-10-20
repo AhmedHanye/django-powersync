@@ -1,0 +1,53 @@
+services:
+  # A backend which provides basic authentication and CRUD access to the Postgres DB from the client
+  demo-backend:
+    depends_on:
+      pg-db:
+        condition: service_healthy
+    build:
+      context: ./powersync-django-backend-todolist-demo
+      dockerfile: Dockerfile
+    environment:
+      # From the Postgres service name in linked Docker Compose file
+      DATABASE_HOST: pg-db
+      # Shared environment variables for Postgres connection
+      DATABASE_PORT: ${PG_DATABASE_PORT}
+      DATABASE_NAME: ${PG_DATABASE_NAME}
+      DATABASE_USER: ${PG_DATABASE_USER}
+      DATABASE_PASSWORD: ${PG_DATABASE_PASSWORD}
+
+      # PowerSync URL - audience for JWT token validation
+      # Must match one of the audience values in PowerSync config
+      POWERSYNC_URL: powersync
+
+      # JWT issuer - can be any identifier for this backend
+      JWT_ISSUER: http://localhost:${DEMO_BACKEND_PORT}
+
+      # Keys here for demonstration
+      POWERSYNC_PUBLIC_KEY: ${DEMO_JWKS_PUBLIC_KEY}
+      POWERSYNC_PRIVATE_KEY: ${DEMO_JWKS_PRIVATE_KEY}
+
+      DJANGO_PORT: ${DEMO_BACKEND_PORT}
+    ports:
+      - ${DEMO_BACKEND_PORT}:${DEMO_BACKEND_PORT}
+
+  # Frontend demo application
+  demo-client:
+    depends_on:
+      demo-backend:
+        condition: service_started
+      powersync:
+        condition: service_started
+    build:
+      context: ./demo-app
+      dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: http://localhost:${DEMO_BACKEND_PORT}
+        VITE_POWERSYNC_URL: http://localhost:${PS_PORT}
+        VITE_CHECKPOINT_MODE: managed
+    environment:
+      VITE_BACKEND_URL: http://localhost:${DEMO_BACKEND_PORT}
+      VITE_POWERSYNC_URL: http://localhost:${PS_PORT}
+      VITE_CHECKPOINT_MODE: managed
+    ports:
+      - ${DEMO_CLIENT_PORT}:4173
