@@ -1,0 +1,169 @@
+name: django-powersync
+services:
+  demo-backend:
+    build:
+      context: ./powersync-django-backend-todolist-demo
+      dockerfile: Dockerfile
+    depends_on:
+      pg-db:
+        condition: service_healthy
+        required: true
+    environment:
+      DATABASE_HOST: pg-db
+      DATABASE_NAME: django_demo
+      DATABASE_PASSWORD: mypassword
+      DATABASE_PORT: "5432"
+      DATABASE_USER: postgres
+      DJANGO_PORT: "6061"
+      JWT_ISSUER: http://localhost:6061
+      POWERSYNC_PRIVATE_KEY: ""
+      POWERSYNC_PUBLIC_KEY: ""
+      POWERSYNC_URL: powersync
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 6061
+        published: "6061"
+        protocol: tcp
+  demo-client:
+    build:
+      context: ./demo-app
+      dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: http://localhost:6061
+        VITE_CHECKPOINT_MODE: managed
+        VITE_POWERSYNC_URL: http://localhost:8080
+    depends_on:
+      demo-backend:
+        condition: service_started
+        required: true
+      powersync:
+        condition: service_started
+        required: true
+    environment:
+      VITE_BACKEND_URL: http://localhost:6061
+      VITE_CHECKPOINT_MODE: managed
+      VITE_POWERSYNC_URL: http://localhost:8080
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 4173
+        published: "3030"
+        protocol: tcp
+  mongo:
+    command:
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --quiet
+    image: mongo:7.0
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 27017
+        published: "27017"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: mongo_storage
+        target: /data/db
+        volume: {}
+  mongo-rs-init:
+    depends_on:
+      mongo:
+        condition: service_started
+        required: true
+    entrypoint:
+      - bash
+      - -c
+      - 'mongosh --host mongo:27017 --eval ''try{rs.status().ok && quit(0)} catch {} rs.initiate({_id: "rs0", version: 1, members: [{ _id: 0, host : "mongo:27017" }]})'''
+    image: mongo:7.0
+    networks:
+      default: null
+    restart: on-failure
+  pg-db:
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+    environment:
+      PGPORT: "5432"
+      POSTGRES_DB: django_demo
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_USER: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d django_demo
+      timeout: 5s
+      interval: 5s
+      retries: 5
+    image: postgres:latest
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 5432
+        published: "5432"
+        protocol: tcp
+    restart: always
+    volumes:
+      - type: volume
+        source: pg_data
+        target: /var/lib/postgresql/data
+        volume: {}
+  powersync:
+    command:
+      - start
+      - -r
+      - unified
+    depends_on:
+      mongo-rs-init:
+        condition: service_completed_successfully
+        required: true
+      pg-db:
+        condition: service_healthy
+        required: true
+    environment:
+      NODE_OPTIONS: --max-old-space-size=1000
+      POWERSYNC_CONFIG_PATH: /config/powersync.yaml
+      PS_DATA_SOURCE_URI: postgres://postgres:mypassword@pg-db:5432/django_demo
+      PS_JWKS_URL: http://demo-backend:6061/api/get_keys/
+      PS_MONGO_URI: mongodb://mongo:27017/powersync_demo
+      PS_PORT: "8080"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - 'fetch(''http://localhost:8080/probes/liveness'').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))'
+      timeout: 1s
+      interval: 5s
+      retries: 15
+    image: journeyapps/powersync-service:latest
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 8080
+        published: "8080"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /home/ahmed/files/projects/django-powersync/config
+        target: /config
+        bind:
+          create_host_path: true
+networks:
+  default:
+    name: django-powersync_default
+volumes:
+  mongo_storage:
+    name: django-powersync_mongo_storage
+  pg_data:
+    name: django-powersync_pg_data
